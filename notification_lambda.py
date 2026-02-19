@@ -34,6 +34,7 @@ WATCH_TEAMS = {
     "FC Midtjylland",
     "FC Bayern München",
     "Galatasaray SK",
+    "Arsenal FC", #add arsenal
 }
 
 sns = boto3.client("sns")
