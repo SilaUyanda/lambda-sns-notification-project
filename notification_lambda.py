@@ -9,6 +9,7 @@ import boto3
 
 BASE_URL = "https://api.football-data.org/v4"
 
+# Added: CL (UEFA Champions League) and EL (UEFA Europa League)
 COMPETITIONS = [
     "PL",
     "PD",
@@ -16,12 +17,15 @@ COMPETITIONS = [
     "DED",
     "PPL",
     "BL1",
+    "CL",  # UEFA Champions League
+    "EL",  # UEFA Europa League
     "DSU",
     "TSU",
 ]
 
 WATCH_TEAMS = {
     "Manchester City FC",
+    "Manchester United FC",  # Added Man United
     "Liverpool FC",
     "Newcastle United FC",
     "FC Barcelona",
@@ -34,10 +38,11 @@ WATCH_TEAMS = {
     "FC Midtjylland",
     "FC Bayern München",
     "Galatasaray SK",
-    "Arsenal FC", #add arsenal
+    "Arsenal FC",  # add arsenal
 }
 
 sns = boto3.client("sns")
+
 
 def http_get(path: str, params=None) -> dict:
     token = os.environ.get("FOOTBALL_DATA_TOKEN")
@@ -62,8 +67,10 @@ def http_get(path: str, params=None) -> dict:
     with urllib.request.urlopen(request, timeout=20) as response:
         return json.loads(response.read().decode("utf-8"))
 
+
 def parse_utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
 
 def format_email(matches: list) -> str:
     if not matches:
@@ -76,6 +83,7 @@ def format_email(matches: list) -> str:
         )
     return "\n".join(lines)
 
+
 def publish_email(subject: str, message: str):
     topic_arn = os.environ.get("SNS_TOPIC_ARN")
     if not topic_arn:
@@ -83,9 +91,10 @@ def publish_email(subject: str, message: str):
 
     sns.publish(
         TopicArn=topic_arn,
-        Subject=subject[:100],  # SNS subject limit
+        Subject=subject[:100],
         Message=message
     )
+
 
 def lambda_handler(event, context):
     now = datetime.now(timezone.utc)
@@ -114,9 +123,9 @@ def lambda_handler(event, context):
             if not home or not away or not utc_date:
                 continue
 
-            kickoff = parse_utc(utc_date)
+            kickoff_dt = parse_utc(utc_date)
 
-            if not (now <= kickoff <= end_of_tomorrow):
+            if not (now <= kickoff_dt <= end_of_tomorrow):
                 continue
 
             if home not in WATCH_TEAMS and away not in WATCH_TEAMS:
@@ -124,25 +133,31 @@ def lambda_handler(event, context):
 
             results.append({
                 "competition": (match.get("competition") or {}).get("name"),
-                "kickoff_utc": kickoff.strftime("%Y-%m-%d %H:%M UTC"),
+                "kickoff_dt": kickoff_dt,  # keep datetime for proper sorting
+                "kickoff_utc": kickoff_dt.strftime("%Y-%m-%d %H:%M UTC"),
                 "home": home,
                 "away": away,
             })
 
-    results.sort(key=lambda x: x["kickoff_utc"])
+    # Proper sort by datetime (not string)
+    results.sort(key=lambda x: x["kickoff_dt"])
 
-    subject = f"Match Alerts (Today/Tomorrow): {len(results)} match(es)"
-    message = format_email(results)
+    # Remove kickoff_dt before emailing/returning (optional, but cleaner)
+    email_results = [
+        {k: v for k, v in r.items() if k != "kickoff_dt"} for r in results
+    ]
 
-    # Send email every run (even if zero)
+    subject = f"Match Alerts (Today/Tomorrow): {len(email_results)} match(es)"
+    message = format_email(email_results)
+
     publish_email(subject, message)
 
     return {
         "statusCode": 200,
         "body": json.dumps(
             {
-                "count": len(results),
-                "matches": results,
+                "count": len(email_results),
+                "matches": email_results,
             },
             indent=2,
         ),
